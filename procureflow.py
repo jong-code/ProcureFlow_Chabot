@@ -4,36 +4,40 @@ from snowflake.snowpark import Session
 from snowflake.snowpark.context import get_active_session
 import pandas as pd
 import os
+from dotenv import load_dotenv
+
+# --------------------------------------------------------
+# LOAD .ENV FILE
+# --------------------------------------------------------
+load_dotenv()
 
 # --------------------------------------------------------
 # SNOWFLAKE CONNECTION (external connection)
 # --------------------------------------------------------
-# Initialize connection
 @st.cache_resource
 def init_connection():
     try:
-        # Try to get active session first (for Snowsight)
+        # Try Snowflake-native session first (works inside Snowsight)
         return get_active_session()
     except Exception:
-        # Fall back to manual connection using secrets
+        # External connection (local machine)
         connection_parameters = {
-            "account": st.secrets["snowflake"]["account"],
-            "user": st.secrets["snowflake"]["user"],
-            "password": st.secrets["snowflake"]["password"],
-            "warehouse": st.secrets["snowflake"]["warehouse"],
-            "database": st.secrets["snowflake"]["database"],
-            "schema": st.secrets["snowflake"]["schema"],
-            "role": st.secrets["snowflake"].get("role", "ACCOUNTADMIN")
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "database": os.getenv("SNOWFLAKE_DATABASE"),
+            "schema": os.getenv("SNOWFLAKE_SCHEMA"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN")
         }
         return Session.builder.configs(connection_parameters).create()
 
-# Get Snowflake session
 session = init_connection()
 
 st.title("💬 ProcureFlow Procurement Chatbot (External App)")
 
 # --------------------------------------------------------
-# LOAD Q&A DATA FROM SNOWFLAKE
+# LOAD Q&A DATA
 # --------------------------------------------------------
 @st.cache_data
 def load_qa():
@@ -56,16 +60,16 @@ def best_match(user_input):
         score = SequenceMatcher(None, cleaned, q.lower()).ratio()
         scores.append(score)
 
-    best_index = scores.index(max(scores))
-    return df.iloc[best_index]["QUESTION"], df.iloc[best_index]["ANSWER"], max(scores)
+    idx = scores.index(max(scores))
+    return df.iloc[idx]["QUESTION"], df.iloc[idx]["ANSWER"], max(scores)
 
 # --------------------------------------------------------
-# CHECK CORTEX AVAILABILITY
+# CHECK CORTEX ENABLEMENT
 # --------------------------------------------------------
 def cortex_available():
     try:
-        test = session.sql(
-            "SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-large2','hello') as r"
+        session.sql(
+            "SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-large2','hello')"
         ).collect()
         return True
     except:
@@ -81,7 +85,7 @@ if "messages" not in st.session_state:
 
 st.markdown("### 🤖 Ask anything about procurement")
 
-# Show history
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -95,10 +99,8 @@ if prompt := st.chat_input("Your procurement question…"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get best matched FAQ
     q, a, score = best_match(prompt)
 
-    # Build context for AI
     cortex_prompt = f"""
     You are an AI procurement assistant.
 
@@ -115,19 +117,19 @@ if prompt := st.chat_input("Your procurement question…"):
     """
 
     # ----------------------------------------------------
-    # THINKING MODE (CORTEX) IF AVAILABLE
+    # Cortex mode
     # ----------------------------------------------------
     if cortex_enabled:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    cortex_query = f"""
+                    sql = f"""
                         SELECT SNOWFLAKE.CORTEX.COMPLETE(
                             'mistral-large2',
                             '{cortex_prompt.replace("'", "''")}'
                         ) AS RESPONSE
                     """
-                    result = session.sql(cortex_query).collect()
+                    result = session.sql(sql).collect()
                     response = result[0]["RESPONSE"]
 
                     st.markdown(response)
@@ -141,14 +143,15 @@ if prompt := st.chat_input("Your procurement question…"):
                     st.session_state.messages.append(
                         {"role": "assistant", "content": err}
                     )
+
     else:
-        # Fallback to regular match only
+        # Fallback (No Cortex)
         fallback = f"""
         **Closest Match:** {q}
 
         **Answer:** {a}
 
-        ⚠ Cortex AI is not enabled in your Snowflake account.
+        ⚠ Cortex AI is NOT enabled in your Snowflake account.
         """
         with st.chat_message("assistant"):
             st.markdown(fallback)
@@ -157,7 +160,9 @@ if prompt := st.chat_input("Your procurement question…"):
             {"role": "assistant", "content": fallback}
         )
 
-# Reload Q&A
+# --------------------------------------------------------
+# RELOAD BUTTON
+# --------------------------------------------------------
 if st.button("🔄 Reload Data"):
     load_qa.clear()
     df = load_qa()
