@@ -1,31 +1,35 @@
 import streamlit as st
 from difflib import SequenceMatcher
 from snowflake.snowpark import Session
+from snowflake.snowpark.context import get_active_session
 import pandas as pd
+
+
+st.write("🔍 Loaded secrets keys:", list(st.secrets.keys()))
 
 # --------------------------------------------------------
 # SNOWFLAKE CONNECTION (uses Streamlit Secrets)
 # --------------------------------------------------------
+# Initialize connection
 @st.cache_resource
 def init_connection():
     try:
+        # Try to get active session first (for Snowsight)
+        return get_active_session()
+    except Exception:
+        # Fall back to manual connection using secrets
         connection_parameters = {
-            "account": st.secrets["SNOWFLAKE_ACCOUNT"],
-            "user": st.secrets["SNOWFLAKE_USER"],
-            "password": st.secrets["SNOWFLAKE_PASSWORD"],
-            "role": st.secrets["SNOWFLAKE_ROLE"],
-            "warehouse": st.secrets["SNOWFLAKE_WAREHOUSE"],
-            "database": st.secrets["SNOWFLAKE_DATABASE"],
-            "schema": st.secrets["SNOWFLAKE_SCHEMA"],
+            "account": st.secrets["snowflake"]["account"],
+            "user": st.secrets["snowflake"]["user"],
+            "password": st.secrets["snowflake"]["password"],
+            "warehouse": st.secrets["snowflake"]["warehouse"],
+            "database": st.secrets["snowflake"]["database"],
+            "schema": st.secrets["snowflake"]["schema"],
+            "role": st.secrets["snowflake"].get("role", "ACCOUNTADMIN")
         }
-        session = Session.builder.configs(connection_parameters).create()
-        return session
+        return Session.builder.configs(connection_parameters).create()
 
-    except Exception as e:
-        st.error(f"❌ Snowflake connection failed: {e}")
-        return None
-
-
+# Get Snowflake session
 session = init_connection()
 
 st.title("💬 ProcureFlow Procurement Chatbot (AI-Enhanced)")
