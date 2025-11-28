@@ -1,8 +1,8 @@
 streamlit
-snowflake-snowpark-python
-snowflake-connector-python
 pandas
 numpy
 python-dotenv
 matplotlib
 os
+snowflake-snowpark-python
+snowflake-connector-python
