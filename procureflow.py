@@ -1,56 +1,56 @@
 import streamlit as st
 from difflib import SequenceMatcher
 from snowflake.snowpark import Session
-from snowflake.snowpark.context import get_active_session
 import pandas as pd
-import os
-from dotenv import load_dotenv
 
 # --------------------------------------------------------
-# LOAD .ENV FILE
-# --------------------------------------------------------
-load_dotenv()
-
-# --------------------------------------------------------
-# SNOWFLAKE CONNECTION (external connection)
+# SNOWFLAKE CONNECTION (uses Streamlit Secrets)
 # --------------------------------------------------------
 @st.cache_resource
 def init_connection():
     try:
-        # Try Snowflake-native session first (works inside Snowsight)
-        return get_active_session()
-    except Exception:
-        # External connection (local machine)
         connection_parameters = {
-            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
-            "user": os.getenv("SNOWFLAKE_USER"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD"),
-            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
-            "database": os.getenv("SNOWFLAKE_DATABASE"),
-            "schema": os.getenv("SNOWFLAKE_SCHEMA"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN")
+            "account": st.secrets["SNOWFLAKE_ACCOUNT"],
+            "user": st.secrets["SNOWFLAKE_USER"],
+            "password": st.secrets["SNOWFLAKE_PASSWORD"],
+            "role": st.secrets["SNOWFLAKE_ROLE"],
+            "warehouse": st.secrets["SNOWFLAKE_WAREHOUSE"],
+            "database": st.secrets["SNOWFLAKE_DATABASE"],
+            "schema": st.secrets["SNOWFLAKE_SCHEMA"],
         }
-        return Session.builder.configs(connection_parameters).create()
+        session = Session.builder.configs(connection_parameters).create()
+        return session
+
+    except Exception as e:
+        st.error(f"❌ Snowflake connection failed: {e}")
+        return None
+
 
 session = init_connection()
 
-st.title("💬 ProcureFlow Procurement Chatbot (External App)")
+st.title("💬 ProcureFlow Procurement Chatbot (AI-Enhanced)")
+
 
 # --------------------------------------------------------
-# LOAD Q&A DATA
+# LOAD Q&A TABLE
 # --------------------------------------------------------
 @st.cache_data
 def load_qa():
+    if session is None:
+        st.stop()
+
     df = session.table("PROCURE_TABLE").select("QUESTION", "ANSWER").to_pandas()
     df["QUESTION"] = df["QUESTION"].astype(str).str.strip()
-    df["ANSWER"]  = df["ANSWER"].astype(str).str.strip()
+    df["ANSWER"] = df["ANSWER"].astype(str).str.strip()
     return df
 
+
 df = load_qa()
-st.write(f"📌 Loaded **{len(df)}** Q&A pairs from Snowflake.")
+st.write(f"📌 Loaded **{len(df)}** Q&A pairs.")
+
 
 # --------------------------------------------------------
-# FUZZY MATCHING
+# FUZZY MATCH FUNCTION
 # --------------------------------------------------------
 def best_match(user_input):
     scores = []
@@ -60,40 +60,45 @@ def best_match(user_input):
         score = SequenceMatcher(None, cleaned, q.lower()).ratio()
         scores.append(score)
 
-    idx = scores.index(max(scores))
-    return df.iloc[idx]["QUESTION"], df.iloc[idx]["ANSWER"], max(scores)
+    best_index = scores.index(max(scores))
+    return df.iloc[best_index]["QUESTION"], df.iloc[best_index]["ANSWER"], max(scores)
+
 
 # --------------------------------------------------------
-# CHECK CORTEX ENABLEMENT
+# CHECK IF CORTEX IS AVAILABLE
 # --------------------------------------------------------
-def cortex_available():
+def check_cortex():
+    if session is None:
+        return False
     try:
-        session.sql(
-            "SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-large2','hello')"
-        ).collect()
+        q = "SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-large2','test') AS r"
+        session.sql(q).collect()
         return True
     except:
         return False
 
-cortex_enabled = cortex_available()
+
+cortex_enabled = check_cortex()
+
 
 # --------------------------------------------------------
 # CHAT UI
 # --------------------------------------------------------
+st.markdown("### 🤖 Ask anything about Procurement")
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-st.markdown("### 🤖 Ask anything about procurement")
-
-# Display chat history
+# Show chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+
 # --------------------------------------------------------
-# CHAT INPUT HANDLING
+# PROCESS USER INPUT
 # --------------------------------------------------------
-if prompt := st.chat_input("Your procurement question…"):
+if prompt := st.chat_input("Type your procurement question…"):
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("user"):
@@ -101,58 +106,55 @@ if prompt := st.chat_input("Your procurement question…"):
 
     q, a, score = best_match(prompt)
 
-    cortex_prompt = f"""
-    You are an AI procurement assistant.
+    qa_context = f"""
+    You are an AI assistant for a procurement office.
 
-    Closest matched FAQ:
+    The closest matched FAQ entry is:
     Question: {q}
     Answer: {a}
-    Confidence Score: {score:.3f}
+    Match confidence: {score:.3f}
 
     User Question: {prompt}
 
-    If confidence > 0.60 → refine and improve the FAQ answer.
-    If confidence ≤ 0.60 → produce a knowledgeable procurement explanation.
-    Always answer clearly and professionally.
+    If confidence is high (>0.60), refine & expand the given answer.
+    If confidence is low (<=0.60), explain that you're using reasoning instead.
+    Provide a clear, helpful procurement answer.
     """
 
-    # ----------------------------------------------------
-    # Cortex mode
-    # ----------------------------------------------------
+    # --------------------------------------------------------
+    # AI MODE (Cortex)
+    # --------------------------------------------------------
     if cortex_enabled:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    sql = f"""
+                    query = f"""
                         SELECT SNOWFLAKE.CORTEX.COMPLETE(
                             'mistral-large2',
-                            '{cortex_prompt.replace("'", "''")}'
+                            '{qa_context.replace("'", "''")}'
                         ) AS RESPONSE
                     """
-                    result = session.sql(sql).collect()
-                    response = result[0]["RESPONSE"]
+                    res = session.sql(query).collect()
+                    bot_response = res[0]["RESPONSE"]
 
-                    st.markdown(response)
+                    st.markdown(bot_response)
+
                     st.session_state.messages.append(
-                        {"role": "assistant", "content": response}
+                        {"role": "assistant", "content": bot_response}
                     )
 
                 except Exception as e:
-                    err = f"❌ Cortex Error: {str(e)}"
-                    st.markdown(err)
+                    error_msg = f"❌ Cortex Error: {e}"
+                    st.markdown(error_msg)
                     st.session_state.messages.append(
-                        {"role": "assistant", "content": err}
+                        {"role": "assistant", "content": error_msg}
                     )
 
+    # --------------------------------------------------------
+    # FALLBACK MODE (No Cortex)
+    # --------------------------------------------------------
     else:
-        # Fallback (No Cortex)
-        fallback = f"""
-        **Closest Match:** {q}
-
-        **Answer:** {a}
-
-        ⚠ Cortex AI is NOT enabled in your Snowflake account.
-        """
+        fallback = f"**Closest Match:** {q}\n\n**Answer:** {a}\n\n⚠ Cortex is disabled."
         with st.chat_message("assistant"):
             st.markdown(fallback)
 
@@ -160,10 +162,10 @@ if prompt := st.chat_input("Your procurement question…"):
             {"role": "assistant", "content": fallback}
         )
 
+
 # --------------------------------------------------------
-# RELOAD BUTTON
+# RELOAD DATA BUTTON
 # --------------------------------------------------------
 if st.button("🔄 Reload Data"):
     load_qa.clear()
-    df = load_qa()
-    st.success("Data reloaded from Snowflake!")
+    st.success("Data reloaded!")
