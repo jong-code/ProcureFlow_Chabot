@@ -1,8 +1,4 @@
 streamlit
-pandas
-numpy
-python-dotenv
-matplotlib
-os
 snowflake-snowpark-python
-snowflake-connector-python
+pandas
+python-dotenv
