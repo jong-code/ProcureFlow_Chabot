@@ -4,9 +4,6 @@ from snowflake.snowpark import Session
 from snowflake.snowpark.context import get_active_session
 import pandas as pd
 
-
-st.write("🔍 Loaded secrets keys:", list(st.secrets.keys()))
-
 # --------------------------------------------------------
 # SNOWFLAKE CONNECTION (uses Streamlit Secrets)
 # --------------------------------------------------------
@@ -173,3 +170,4 @@ if prompt := st.chat_input("Type your procurement question…"):
 if st.button("🔄 Reload Data"):
     load_qa.clear()
     st.success("Data reloaded!")
+
