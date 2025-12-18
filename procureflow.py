@@ -18,7 +18,7 @@ def init_connection():
             "warehouse": st.secrets["snowflake"]["warehouse"],
             "database": st.secrets["snowflake"]["database"],
             "schema": st.secrets["snowflake"]["schema"],
-            "role": st.secrets["snowflake"].get("role", "PROCURE_READ_ROLE")
+            "role": st.secrets["snowflake"].get("role", "ACCOUNTADMIN")
         }).create()
 
 session = init_connection()
@@ -126,3 +126,4 @@ if prompt := st.chat_input("Ask a procurement question…"):
 if st.button("🔄 Restart Chat"):
     st.session_state.messages = []
     st.success("Chat cleared.")
+
